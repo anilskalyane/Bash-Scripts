@@ -15,4 +15,4 @@ MAIL_TO_IDS='*****@*****.com, *****@*****.com, *****@*****.com';
 mysql $MYSQL_DB -e "set sql_mode='';$MYSQL_QUERY" -B | sed "s/'/\'/;s/\t/\",\"/g;s/^/\"/;s/$/\"/;s/\n//g" > $BACKUP_PATH$FILENAME
 
 #Sending mail with the dump file
-mutt -s $MAIL_SUBJECT -a $BACKUP_PATH$FILENAME -- $MAIL_TO_IDS
+echo | mutt -s $MAIL_SUBJECT -a $BACKUP_PATH$FILENAME -- $MAIL_TO_IDS
