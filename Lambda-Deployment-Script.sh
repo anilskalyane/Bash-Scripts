@@ -1,5 +1,10 @@
 #!/bin/bash
 
+#Base Path
+basePath='/opt/aws-lambda-adapter/'
+logFilePath="$basePath"'deployments/sls-logs/'
+mailTemplFile="$basePath"'deployments/mail-template.sh'
+
 #Declaring the variable
 RED="\033[1;31m"
 GREEN="\033[1;32m"
@@ -16,7 +21,6 @@ slsStage=$1
 slsProfile=$2
 
 #log file
-logFilePath='/opt/aws-lambda-adapter/sls-logs/'
 gitCommitID=$(git log --format="%H" -n 1)
 logFile="$logFilePath$gitCommitID"'.log'
 
@@ -48,7 +52,11 @@ serverlessDeployment(){
     serverless deploy --stage "$slsStage" --region "$slsRegion" --profile "$slsProfile" | tee -a $logFile
   fi
   outputDecorator -1 "${YELLOW}    -------------------------------------------------------"
-  outputDecorator 1 "${GREEN}  Serverless Deployment has successfully finished."
+  if [ $(grep -o 'Service Information' "$logFile" | wc -l) -gt 0 ]; then
+      outputDecorator 1 "${GREEN}  Serverless Deployment has successfully finished."
+  else
+      outputDecorator 1 "${RED}  Serverless deploy failed."
+  fi
 }
 
 #Start default OUTPUT line
@@ -103,6 +111,7 @@ if [ -d '.git'  ] || [ -d '../.git'  ]; then
   outputDecorator -1 "${LIGHTBLUE}GIT:${NOCOLOR}${LIGHTGRAY}  Git resetting the $slsConfig file"
   outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${YELLOW}  --------------- Git revision details ---------------"
   outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  Revision: $gitCommitID"
+  outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  Message : $(git log --format=%B -n 1 $gitCommitID)"
   outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  User    : $gitUserName"
   outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  Email   : $gitUserEmail"
   outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${YELLOW}  ----------------------------------------------------"
@@ -111,25 +120,37 @@ if [ -d '.git'  ] || [ -d '../.git'  ]; then
 	outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${YELLOW}  Revision has merge history and it was TREESAME to following parents"
   	outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${YELLOW}  --------------- Git revision's Parent commit details ---------------"
 	outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  CommitId: ${gitRevCommitIDs[*]}"
+        outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  Message : $(git log --format=%B -n 1 ${gitRevCommitIDs[*]})"
   	outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  Users    : ${gitUserName[*]}"
    	outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  Emails   : ${gitUserEmail[*]}"
   	outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${YELLOW}  ----------------------------------------------------"
   fi
-  git checkout "$slsConfig"
+  #git checkout "$slsConfig"
 else
   outputDecorator 0 "${RED} Git Repository ${NOCOLOR}Not exists"
   exit 1
 fi
-exit 1;
+
 #Check serverless config file and Replace the env variable
 #if [ -f 'serverless.yml' ]; then
-if [ $(ls -1 *.yml 2>/dev/null | wc -l) -gt 0 ] || [ $(ls -1 *.yaml 2>/dev/null | wc -l) -gt 0 ]; then
+#if [ $(ls -1 *.yml 2>/dev/null | wc -l) -gt 0 ] || [ $(ls -1 *.yaml 2>/dev/null | wc -l) -gt 0 ]; then
+if [ -f "$slsConfig" ]; then
   #sed -i "s/.*stage:.*$/  stage: $slsStage/" "$slsConfig"
-  outputDecorator -1 "${LIGHTBLUE}ENV:${NOCOLOR}${LIGHTGRAY}  Resetting the stage variable as $slsStage"
+  outputDecorator -1 "${LIGHTBLUE}ENV:${NOCOLOR}${LIGHTGRAY}  Resetting the stage variable as $slsStage"  
   serverlessDeployment
 else
-  echo 'Error: "$slsConfig" file is not exist.' >&2
-  exit 1
+  for slsDir in * ; do
+   if [ -f "$basePath"'integration/'"$slsDir"'/'"$slsConfig" ]; then
+    outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  ******************** START Serverless Log for $slsDir ********************"
+    outputDecorator -1 "${LIGHTBLUE}ENV:${NOCOLOR}${LIGHTGRAY}  Resetting the stage variable as $slsStage in $slsDir"
+    echo $basePath'integration/'$slsDir
+    cd $basePath'integration/'$slsDir
+    serverlessDeployment
+    outputDecorator -1 "${LIGHTBLUE}    ${NOCOLOR}${LIGHTGRAY}  ******************** END Serverless Log fro $slsDir ********************"
+   fi
+  done
+  #echo 'Error: "$slsConfig" file is not exist.' >&2
+  #exit 1
 fi
 
 #Start default OUTPUT line
@@ -138,7 +159,13 @@ fi
  sed -ri "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g" "$logFilePath$gitBaseName"'.log'
  echo $'\n\n\n\n\n' >> "$logFile"
  #Sending mail with the dump file
- mutt -e "set from=noreply@aceturtle.com" -e "set realname=Deployment" -s "${gitBaseName^} Deployment Logs: $(date +%d%b%Y-%T)" -a "$logFilePath$gitBaseName"'.log' -- $(echo ${gitUserEmail[@]} | tr ' ' ,) < '/tmp/message.txt'
+ mailTempHeader='Deployment'
+ mailTempConcern='Hey there'
+ mailTempBodyTitle='Please find the <b>'"${gitBaseName^}"'</b> repository deployment details, '
+ mailTempBody=$(grep -Pzo '.*Service Information(.*\n)*' $logFilePath$gitBaseName'.log' | head -n -4 | tr '\r\n' '\t' | sed 's/\t/ <br \/> /g')
+ #mailTempBody=$(grep -Pzo '.*Service Information(.*\n)*' $logFilePath$gitBaseName'.log' | head -n -4 | sed ':a;N;$!ba;s/\r\n/<1br \/>/g') 
+ mailTempFooter='Please find the attached file for further details. <p style="font-size: 14px;color: cornflowerblue;">IF YOU HAVE ANY QUESTIONS OR CONCERNS, PLEASE CONTACT <a href="http://bugzilla.aceturtle.net/" target="_blank"><b>DevOps</b></a></p>'
+ sh "$mailTemplFile" "$mailTempHeader" "$mailTempConcern" "$mailTempBodyTitle" "$mailTempBody" "$mailTempFooter" | mutt -e "set from=noreply@aceturtle.com" -e "set realname=Deployment" -e 'set content_type="text/html"' -s "${gitBaseName^} Deployment Logs: $(date +%d%b%Y-%T)" -a "$logFilePath$gitBaseName"'.log' -- $(echo ${gitUserEmail[@]} | tr ' ' ,)
  rm -f "$logFilePath$gitBaseName"'.log'
  rm -f "$logFile"
 #END default line
